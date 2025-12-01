@@ -1,0 +1,92 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+import "@openzeppelin/contracts/token/ERC721/extensions/ERC721URIStorage.sol";
+import "@openzeppelin/contracts/access/Ownable.sol";
+
+/// @title WhuupsNFT
+/// @notice ERC-721 contract with minting, transferring, and basic sale-listing functionality.
+contract WhuupsNFT is ERC721URIStorage, Ownable {
+    // Mapping from token ID to sale price (in wei). If price is 0, not listed for sale.
+    mapping(uint256 => uint256) public tokenPrices;
+    // Mapping from token ID to seller address when listed.
+    mapping(uint256 => address) public tokenSeller;
+
+    /// @notice Emitted when a token is listed for sale.
+    event TokenListed(uint256 indexed tokenId, address indexed seller, uint256 price);
+    /// @notice Emitted when a listed token is purchased.
+    event TokenPurchased(uint256 indexed tokenId, address indexed seller, address indexed buyer, uint256 price);
+    /// @notice Emitted when a listing is cancelled.
+    event ListingCancelled(uint256 indexed tokenId);
+
+    constructor() ERC721("WhuupsNFT", "WPNFT") {
+        // Optionally initialize contract state here
+    }
+
+    /// @notice Mint a new NFT with the given tokenId and metadata URI.
+    /// @dev Only the contract owner can mint.
+    /// @param to Address that will own the minted token.
+    /// @param tokenId Unique identifier for the NFT.
+    /// @param uri Metadata URI (e.g., IPFS link) for the token.
+    function safeMint(address to, uint256 tokenId, string memory uri) public onlyOwner {
+        _safeMint(to, tokenId);
+        _setTokenURI(tokenId, uri);
+    }
+
+    /// @notice List an owned token for sale at the specified price.
+    /// The token is transferred to the contract as escrow.
+    /// @param tokenId The NFT to list.
+    /// @param price Sale price in wei (must be > 0).
+    function listToken(uint256 tokenId, uint256 price) external {
+        require(ownerOf(tokenId) == msg.sender, "Only owner can list");
+        require(price > 0, "Price must be > 0");
+
+        // Transfer token to this contract for escrow (bypasses safe check for simplicity)
+        _transfer(msg.sender, address(this), tokenId);
+
+        tokenPrices[tokenId] = price;
+        tokenSeller[tokenId] = msg.sender;
+
+        emit TokenListed(tokenId, msg.sender, price);
+    }
+
+    /// @notice Buy a listed token by paying the exact sale price.
+    /// Transfers NFT to buyer and ETH to the seller.
+    /// @param tokenId The NFT to purchase.
+    function buyToken(uint256 tokenId) external payable {
+        uint256 price = tokenPrices[tokenId];
+        address seller = tokenSeller[tokenId];
+        require(price > 0, "Token not listed for sale");
+        require(msg.value == price, "Incorrect payment amount");
+
+        // Clear listing state before transfer to prevent reentrancy
+        tokenPrices[tokenId] = 0;
+        tokenSeller[tokenId] = address(0);
+
+        // Transfer the NFT to buyer
+        _transfer(address(this), msg.sender, tokenId);
+
+        // Pay the seller
+        payable(seller).transfer(msg.value);
+
+        emit TokenPurchased(tokenId, seller, msg.sender, price);
+    }
+
+    /// @notice Cancel a token listing and return it to the seller.
+    /// @param tokenId The NFT whose listing is cancelled.
+    function cancelListing(uint256 tokenId) external {
+        uint256 price = tokenPrices[tokenId];
+        address seller = tokenSeller[tokenId];
+        require(price > 0, "Token not listed");
+        require(seller == msg.sender, "Only seller can cancel");
+
+        // Clear listing state
+        tokenPrices[tokenId] = 0;
+        tokenSeller[tokenId] = address(0);
+
+        // Return NFT to seller
+        _transfer(address(this), seller, tokenId);
+
+        emit ListingCancelled(tokenId);
+    }
+}
